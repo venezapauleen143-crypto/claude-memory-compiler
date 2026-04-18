@@ -96,6 +96,7 @@ def main() -> None:
     # Claude Code on Windows may pass paths with unescaped backslashes
     try:
         raw_input = sys.stdin.read()
+        logging.info("RAW STDIN: %s", raw_input[:2000])
         try:
             hook_input: dict = json.loads(raw_input)
         except json.JSONDecodeError:
@@ -105,6 +106,7 @@ def main() -> None:
         logging.error("Failed to parse stdin: %s", e)
         return
 
+    logging.info("PARSED KEYS: %s", list(hook_input.keys()))
     session_id = hook_input.get("session_id", "unknown")
     source = hook_input.get("source", "unknown")
     transcript_path_str = hook_input.get("transcript_path", "")
