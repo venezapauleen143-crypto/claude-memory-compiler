@@ -1,9 +1,11 @@
 """
 SessionEnd hook - captures conversation transcript for memory extraction.
 
-When a Claude Code session ends, this hook reads the transcript path from
-stdin, extracts conversation context, and spawns flush.py as a background
-process to extract knowledge into the daily log.
+When a Claude Code session ends, this hook:
+1. Copies the full transcript to a permanent archive (transcripts/)
+2. Extracts conversation context
+3. Saves a forced summary to daily log (even if flush.py thinks nothing is worth saving)
+4. Spawns flush.py for deeper knowledge extraction
 
 The hook itself does NO API calls - only local file I/O for speed (<10s).
 """
@@ -14,6 +16,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -28,6 +31,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DAILY_DIR = ROOT / "daily"
 SCRIPTS_DIR = ROOT / "scripts"
 STATE_DIR = SCRIPTS_DIR
+TRANSCRIPTS_DIR = ROOT / "transcripts"  # permanent archive
 
 logging.basicConfig(
     filename=str(SCRIPTS_DIR / "flush.log"),
@@ -38,7 +42,7 @@ logging.basicConfig(
 
 MAX_TURNS = 30
 MAX_CONTEXT_CHARS = 15_000
-MIN_TURNS_TO_FLUSH = 1
+MIN_TURNS_TO_FLUSH = 3  # lowered from 5 to catch shorter sessions
 
 
 def extract_conversation_context(transcript_path: Path) -> tuple[str, int]:
@@ -86,14 +90,45 @@ def extract_conversation_context(transcript_path: Path) -> tuple[str, int]:
         context = context[-MAX_CONTEXT_CHARS:]
         boundary = context.find("\n**")
         if boundary > 0:
-            context = context[boundary + 1 :]
+            context = context[boundary + 1:]
 
     return context, len(recent)
 
 
+def save_forced_summary(context: str, turn_count: int, session_id: str):
+    """Always save a summary to daily log, regardless of what flush.py decides."""
+    today = datetime.now(timezone.utc).astimezone()
+    daily_file = DAILY_DIR / f"{today.strftime('%Y-%m-%d')}.md"
+    DAILY_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Create a brief summary from the context
+    # Extract first user message and last assistant message as bookends
+    lines = context.split("\n")
+    user_lines = [l for l in lines if l.startswith("**User:**")]
+    asst_lines = [l for l in lines if l.startswith("**Assistant:**")]
+
+    first_topic = user_lines[0][:200] if user_lines else "(no user messages)"
+    last_response = asst_lines[-1][:200] if asst_lines else "(no assistant messages)"
+
+    summary = (
+        f"### Session {today.strftime('%H:%M')} ({turn_count} turns, {len(context)} chars)\n\n"
+        f"**開始話題:** {first_topic}\n"
+        f"**最後回應:** {last_response}\n"
+        f"**Session ID:** {session_id}\n\n"
+    )
+
+    if daily_file.exists():
+        existing = daily_file.read_text(encoding="utf-8")
+        daily_file.write_text(existing + summary, encoding="utf-8")
+    else:
+        header = f"# Daily Log: {today.strftime('%Y-%m-%d')}\n\n## Sessions\n\n"
+        daily_file.write_text(header + summary, encoding="utf-8")
+
+    logging.info("Forced summary saved to %s (%d turns)", daily_file.name, turn_count)
+
+
 def main() -> None:
     # Read hook input from stdin
-    # Claude Code on Windows may pass paths with unescaped backslashes
     try:
         raw_input = sys.stdin.read()
         logging.info("RAW STDIN: %s", raw_input[:2000])
@@ -122,6 +157,17 @@ def main() -> None:
         logging.info("SKIP: transcript missing: %s", transcript_path_str)
         return
 
+    # === NEW: Copy full transcript to permanent archive ===
+    try:
+        TRANSCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now(timezone.utc).astimezone().strftime("%Y%m%d-%H%M%S")
+        archive_name = f"{timestamp}-{session_id[:8]}.jsonl"
+        archive_path = TRANSCRIPTS_DIR / archive_name
+        shutil.copy2(str(transcript_path), str(archive_path))
+        logging.info("Transcript archived: %s (%d bytes)", archive_name, archive_path.stat().st_size)
+    except Exception as e:
+        logging.warning("Failed to archive transcript: %s", e)
+
     # Extract conversation context in the hook (fast, no API calls)
     try:
         context, turn_count = extract_conversation_context(transcript_path)
@@ -136,6 +182,12 @@ def main() -> None:
     if turn_count < MIN_TURNS_TO_FLUSH:
         logging.info("SKIP: only %d turns (min %d)", turn_count, MIN_TURNS_TO_FLUSH)
         return
+
+    # === NEW: Always save a forced summary to daily log ===
+    try:
+        save_forced_summary(context, turn_count, session_id)
+    except Exception as e:
+        logging.warning("Failed to save forced summary: %s", e)
 
     # Write context to a temp file for the background process
     timestamp = datetime.now(timezone.utc).astimezone().strftime("%Y%m%d-%H%M%S")
@@ -156,8 +208,6 @@ def main() -> None:
         session_id,
     ]
 
-    # On Windows, use CREATE_NO_WINDOW to avoid flash console window.
-    # Do NOT use DETACHED_PROCESS — it breaks the Agent SDK's subprocess I/O.
     creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
     try:
