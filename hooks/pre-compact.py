@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -27,6 +28,8 @@ if os.environ.get("CLAUDE_INVOKED_BY"):
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = ROOT / "scripts"
 STATE_DIR = SCRIPTS_DIR
+DAILY_DIR = ROOT / "daily"
+TRANSCRIPTS_DIR = ROOT / "transcripts"
 
 logging.basicConfig(
     filename=str(SCRIPTS_DIR / "flush.log"),
@@ -134,6 +137,38 @@ def main() -> None:
     if turn_count < MIN_TURNS_TO_FLUSH:
         logging.info("SKIP: only %d turns (min %d)", turn_count, MIN_TURNS_TO_FLUSH)
         return
+
+    # Archive transcript
+    try:
+        TRANSCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now(timezone.utc).astimezone().strftime("%Y%m%d-%H%M%S")
+        archive_path = TRANSCRIPTS_DIR / f"{ts}-compact-{session_id[:8]}.jsonl"
+        shutil.copy2(str(transcript_path), str(archive_path))
+        logging.info("Transcript archived (pre-compact): %s", archive_path.name)
+    except Exception as e:
+        logging.warning("Failed to archive transcript: %s", e)
+
+    # Forced summary to daily log
+    try:
+        DAILY_DIR.mkdir(parents=True, exist_ok=True)
+        today = datetime.now(timezone.utc).astimezone()
+        daily_file = DAILY_DIR / f"{today.strftime('%Y-%m-%d')}.md"
+        lines = context.split("\n")
+        user_lines = [l for l in lines if l.startswith("**User:**")]
+        first_topic = user_lines[0][:200] if user_lines else "(no user messages)"
+        summary = (
+            f"### PreCompact {today.strftime('%H:%M')} ({turn_count} turns)\n\n"
+            f"**話題:** {first_topic}\n"
+            f"**Session ID:** {session_id}\n\n"
+        )
+        if daily_file.exists():
+            existing = daily_file.read_text(encoding="utf-8")
+            daily_file.write_text(existing + summary, encoding="utf-8")
+        else:
+            daily_file.write_text(f"# Daily Log: {today.strftime('%Y-%m-%d')}\n\n## Sessions\n\n" + summary, encoding="utf-8")
+        logging.info("PreCompact summary saved to %s", daily_file.name)
+    except Exception as e:
+        logging.warning("Failed to save pre-compact summary: %s", e)
 
     # Write context to a temp file for the background process
     timestamp = datetime.now(timezone.utc).astimezone().strftime("%Y%m%d-%H%M%S")
