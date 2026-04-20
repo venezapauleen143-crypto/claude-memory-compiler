@@ -138,15 +138,7 @@ def main() -> None:
         logging.info("SKIP: only %d turns (min %d)", turn_count, MIN_TURNS_TO_FLUSH)
         return
 
-    # Archive transcript
-    try:
-        TRANSCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
-        ts = datetime.now(timezone.utc).astimezone().strftime("%Y%m%d-%H%M%S")
-        archive_path = TRANSCRIPTS_DIR / f"{ts}-compact-{session_id[:8]}.jsonl"
-        shutil.copy2(str(transcript_path), str(archive_path))
-        logging.info("Transcript archived (pre-compact): %s", archive_path.name)
-    except Exception as e:
-        logging.warning("Failed to archive transcript: %s", e)
+    # NOTE: transcript 歸檔不需要，Claude Code 已永久保存在 ~/.claude/projects/*.jsonl
 
     # Forced summary to daily log
     try:

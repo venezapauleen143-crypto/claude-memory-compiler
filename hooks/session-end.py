@@ -157,16 +157,7 @@ def main() -> None:
         logging.info("SKIP: transcript missing: %s", transcript_path_str)
         return
 
-    # === NEW: Copy full transcript to permanent archive ===
-    try:
-        TRANSCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now(timezone.utc).astimezone().strftime("%Y%m%d-%H%M%S")
-        archive_name = f"{timestamp}-{session_id[:8]}.jsonl"
-        archive_path = TRANSCRIPTS_DIR / archive_name
-        shutil.copy2(str(transcript_path), str(archive_path))
-        logging.info("Transcript archived: %s (%d bytes)", archive_name, archive_path.stat().st_size)
-    except Exception as e:
-        logging.warning("Failed to archive transcript: %s", e)
+    # NOTE: transcript 歸檔不需要，Claude Code 已永久保存在 ~/.claude/projects/*.jsonl
 
     # Extract conversation context in the hook (fast, no API calls)
     try:
