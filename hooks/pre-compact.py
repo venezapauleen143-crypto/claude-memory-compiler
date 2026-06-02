@@ -15,7 +15,6 @@ import json
 import logging
 import os
 import re
-import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -29,7 +28,6 @@ ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = ROOT / "scripts"
 STATE_DIR = SCRIPTS_DIR
 DAILY_DIR = ROOT / "daily"
-TRANSCRIPTS_DIR = ROOT / "transcripts"
 
 logging.basicConfig(
     filename=str(SCRIPTS_DIR / "flush.log"),
@@ -165,7 +163,11 @@ def main() -> None:
     # Write context to a temp file for the background process
     timestamp = datetime.now(timezone.utc).astimezone().strftime("%Y%m%d-%H%M%S")
     context_file = STATE_DIR / f"flush-context-{session_id}-{timestamp}.md"
-    context_file.write_text(context, encoding="utf-8")
+    try:
+        context_file.write_text(context, encoding="utf-8")
+    except Exception as e:
+        logging.error("Failed to write context file %s: %s", context_file, e)
+        return
 
     # Spawn flush.py as a background process
     flush_script = SCRIPTS_DIR / "flush.py"

@@ -2,10 +2,12 @@
 SessionEnd hook - captures conversation transcript for memory extraction.
 
 When a Claude Code session ends, this hook:
-1. Copies the full transcript to a permanent archive (transcripts/)
-2. Extracts conversation context
-3. Saves a forced summary to daily log (even if flush.py thinks nothing is worth saving)
-4. Spawns flush.py for deeper knowledge extraction
+1. Extracts conversation context from the transcript
+2. Saves a forced summary to daily log (even if flush.py thinks nothing is worth saving)
+3. Spawns flush.py for deeper knowledge extraction
+
+Note: the transcript itself is NOT archived here — Claude Code already keeps it
+permanently at ~/.claude/projects/*.jsonl.
 
 The hook itself does NO API calls - only local file I/O for speed (<10s).
 """
@@ -16,7 +18,6 @@ import json
 import logging
 import os
 import re
-import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -31,7 +32,6 @@ ROOT = Path(__file__).resolve().parent.parent
 DAILY_DIR = ROOT / "daily"
 SCRIPTS_DIR = ROOT / "scripts"
 STATE_DIR = SCRIPTS_DIR
-TRANSCRIPTS_DIR = ROOT / "transcripts"  # permanent archive
 
 logging.basicConfig(
     filename=str(SCRIPTS_DIR / "flush.log"),
@@ -183,7 +183,11 @@ def main() -> None:
     # Write context to a temp file for the background process
     timestamp = datetime.now(timezone.utc).astimezone().strftime("%Y%m%d-%H%M%S")
     context_file = STATE_DIR / f"session-flush-{session_id}-{timestamp}.md"
-    context_file.write_text(context, encoding="utf-8")
+    try:
+        context_file.write_text(context, encoding="utf-8")
+    except Exception as e:
+        logging.error("Failed to write context file %s: %s", context_file, e)
+        return
 
     # Spawn flush.py as a background process
     flush_script = SCRIPTS_DIR / "flush.py"

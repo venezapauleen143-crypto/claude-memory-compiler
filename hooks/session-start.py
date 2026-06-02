@@ -119,7 +119,11 @@ def build_context() -> str:
 
 
 def main():
-    context = build_context()
+    try:
+        context = build_context()
+    except Exception as e:
+        # Never let a read failure break session start — emit a minimal valid payload.
+        context = f"(session-start hook error: {e})"
 
     output = {
         "hookSpecificOutput": {
